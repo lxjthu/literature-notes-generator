@@ -1,9 +1,9 @@
 {
-  "id": "literature-notes-generator",
-  "name": "Literature Notes Generator",
-  "description": "generate literature notes",
-  "author": "lxjthu",
-
-  "minAppVersion": "0.11.0",
-  "version": "0.0.1"
+    "id": "literature-notes-generator",
+    "name": "Literature Notes Generator",
+    "version": "1.0.0",
+    "minAppVersion": "0.15.0",
+    "description": "为文献笔记生成结构化的笔记模板",
+    "author": "你的名字",
+    "isDesktopOnly": false
 }
