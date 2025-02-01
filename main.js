@@ -104,20 +104,53 @@ var LiteratureNotesGenerator = class extends import_obsidian.Plugin {
       const content = await this.app.vault.read(activeFile);
       const literatures = this.parseLiteratures(content);
       const mainFolder = await this.createFolderIfNotExists(folderName);
+      const summaryFolder = await this.createFolderIfNotExists(`${mainFolder.path}/\u5361\u7247\u6C47\u603B`);
       for (const lit of literatures) {
         await this.createLiteratureStructure(mainFolder, lit);
       }
+      await this.generateSummaryNotes(summaryFolder, folderName);
       let newContent = content;
       for (const lit of literatures) {
         const overviewPath = `${folderName}/${lit.title}/Overview`;
         const linkText = `[[${overviewPath}|${lit.title}]]`;
         newContent = newContent.replace(
-          new RegExp(`${lit.title} \\[J\\]`),
-          `${linkText} [J]`
+          new RegExp(`${lit.title}\\s*\\[${lit.type}\\]`),
+          `${linkText} [${lit.type}]`
         );
       }
-      await this.app.vault.modify(activeFile, newContent);
+      const originalFileName = activeFile.basename;
+      await this.app.vault.create(
+        `${mainFolder.path}/${originalFileName}.md`,
+        newContent
+      );
     }).open();
+  }
+  // 添加：生成汇总笔记的方法
+  async generateSummaryNotes(summaryFolder, mainFolderName) {
+    for (const cardType of this.settings.readingCards) {
+      const content = await this.generateSummaryContent(cardType, mainFolderName);
+      await this.app.vault.create(`${summaryFolder.path}/${cardType}\u6C47\u603B.md`, content);
+    }
+  }
+  // 添加：生成汇总笔记内容的方法
+  async generateSummaryContent(cardType, mainFolderName) {
+    return `---
+type: summary
+card-type: ${cardType}
+---
+
+# ${cardType}\u6C47\u603B
+
+\`\`\`dataview
+TABLE 
+    authors as "\u4F5C\u8005",
+    date as "\u53D1\u8868\u5E74\u4EFD",
+    regexreplace(text, ".*#\u6458\u8981\\s*([^#]*?)(?=#|$)", "$1") as "\u7B14\u8BB0\u5185\u5BB9"
+FROM "${mainFolderName}"
+WHERE type = "reading-card" 
+    AND card-type = "${cardType}"    
+SORT date DESC
+\`\`\``;
   }
   async createLiteratureStructure(mainFolder, literature) {
     const litFolder = await this.createFolderIfNotExists(`${mainFolder.path}/${literature.title}`);
@@ -143,17 +176,16 @@ journal: ${literature.journal}
 date: ${literature.publicationDate}
 type: overview
 ---
-
+      
 # ${literature.title}
-
+       
 ## \u57FA\u672C\u4FE1\u606F
-- \u4F5C\u8005\uFF1A${literature.authors}
-- \u671F\u520A\uFF1A${literature.journal}
-- \u53D1\u8868\u65F6\u95F4\uFF1A${literature.publicationDate}
-
+    - \u4F5C\u8005\uFF1A${literature.authors}
+    - \u671F\u520A\uFF1A${literature.journal}
+    - \u53D1\u8868\u65F6\u95F4\uFF1A${literature.publicationDate}
+        
 ## \u7B14\u8BB0\u5BFC\u822A
-${this.settings.readingCards.map((card) => `- [[${card}]]`).join("\n")}
-`;
+${this.settings.readingCards.map((card) => `- [[${card}]]`).join("\n")}`;
   }
   generateCardContent(cardName, literature) {
     return `---
@@ -164,8 +196,14 @@ date: ${literature.publicationDate}
 type: reading-card
 card-type: ${cardName}
 ---
-
+    
 # ${cardName}
+    
+## \u7B14\u8BB0\u5185\u5BB9
+    
+#\u6458\u8981 
+
+#\u6B63\u6587
 
 `;
   }
@@ -179,16 +217,29 @@ card-type: ${cardName}
     const lines = content.split("\n");
     const literatures = [];
     for (const line of lines) {
-      const match = line.match(/\[\d+\](.*?)\. (.*?) \[J\]\. (.*?), (\d{4})/);
-      if (match) {
-        const [, authors, title, journal, publicationDate] = match;
-        literatures.push({
-          title: title.trim(),
-          authors: authors.trim(),
-          journal: journal.trim(),
-          publicationDate: publicationDate.trim()
-        });
+      const patterns = {
+        J: /\[\d+\](.*?)\.(.*?)\[J\]\.(.*?),(\d{4}),.*?(?:\.DOI:|$)/,
+        C: /\[\d+\](.*?)\. (.*?) \[C\]\/\/.*?\. (.*?), (\d{4})/,
+        M: /\[\d+\](.*?)\. (.*?) \[M\]\. (.*?): .*?, (\d{4})/,
+        D: /\[\d+\](.*?)\. (.*?) \[D\]\. (.*?), (\d{4})/
+      };
+      for (const [type, pattern] of Object.entries(patterns)) {
+        const match = line.match(pattern);
+        if (match) {
+          const [, authors, title, journal, publicationDate] = match;
+          literatures.push({
+            title: title.trim(),
+            authors: authors.trim(),
+            journal: journal.trim(),
+            publicationDate: publicationDate.trim(),
+            type
+          });
+          break;
+        }
       }
+    }
+    if (literatures.length === 0) {
+      new import_obsidian.Notice("\u672A\u8BC6\u522B\u5230\u4EFB\u4F55\u6587\u732E\u5F15\u7528\uFF0C\u8BF7\u68C0\u67E5\u683C\u5F0F\u662F\u5426\u6B63\u786E");
     }
     return literatures;
   }

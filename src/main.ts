@@ -1,10 +1,12 @@
-import { App, Plugin, PluginSettingTab, Setting, TFile, TFolder, Modal } from 'obsidian';
+// 在文件顶部的 import 语句中添加 Notice
+import { App, Plugin, PluginSettingTab, Setting, TFile, TFolder, Modal, Notice } from 'obsidian';
 
 interface LiteratureNote {
     title: string;
     authors: string;
     journal: string;
     publicationDate: string;
+    type: string;  // 添加文献类型
 }
 
 interface PluginSettings {
@@ -105,34 +107,74 @@ export default class LiteratureNotesGenerator extends Plugin {
         if (!activeFile) {
             return;
         }
-
-        // 获取当前文件名（不含扩展名）作为默认文件夹名
+    
         const defaultFolderName = activeFile.basename;
-
-        // 显示对话框
+    
         new FolderNameModal(this.app, defaultFolderName, async (folderName) => {
             const content = await this.app.vault.read(activeFile);
             const literatures = this.parseLiteratures(content);
             const mainFolder = await this.createFolderIfNotExists(folderName);
-
+            
+            // 添加：创建卡片汇总文件夹
+            const summaryFolder = await this.createFolderIfNotExists(`${mainFolder.path}/卡片汇总`);
+            
             // 创建笔记结构
             for (const lit of literatures) {
                 await this.createLiteratureStructure(mainFolder, lit);
             }
-
-            // 更新原始笔记，添加双向链接
+    
+            // 添加：生成汇总笔记
+            await this.generateSummaryNotes(summaryFolder, folderName);
+    
+            // 创建原始文档的副本并添加双向链接
             let newContent = content;
             for (const lit of literatures) {
                 const overviewPath = `${folderName}/${lit.title}/Overview`;
                 const linkText = `[[${overviewPath}|${lit.title}]]`;
+                // 根据文献类型替换原文中的引用
                 newContent = newContent.replace(
-                    new RegExp(`${lit.title} \\[J\\]`),
-                    `${linkText} [J]`
+                    new RegExp(`${lit.title}\\s*\\[${lit.type}\\]`),
+                    `${linkText} [${lit.type}]`
                 );
             }
-            await this.app.vault.modify(activeFile, newContent);
+            
+            // 在主文件夹中创建原始文档的副本
+            const originalFileName = activeFile.basename;
+            await this.app.vault.create(
+                `${mainFolder.path}/${originalFileName}.md`,
+                newContent
+            );
         }).open();
     }
+
+    // 添加：生成汇总笔记的方法
+    private async generateSummaryNotes(summaryFolder: TFolder, mainFolderName: string) {
+        for (const cardType of this.settings.readingCards) {
+            const content = await this.generateSummaryContent(cardType, mainFolderName);
+            await this.app.vault.create(`${summaryFolder.path}/${cardType}汇总.md`, content);
+        }
+    }
+
+// 添加：生成汇总笔记内容的方法
+private async generateSummaryContent(cardType: string, mainFolderName: string): Promise<string> {
+    return `---
+type: summary
+card-type: ${cardType}
+---
+
+# ${cardType}汇总
+
+\`\`\`dataview
+TABLE 
+    authors as "作者",
+    date as "发表年份",
+    regexreplace(text, ".*#摘要\\s*([^#]*?)(?=#|$)", "\$1") as "笔记内容"
+FROM "${mainFolderName}"
+WHERE type = "reading-card" 
+    AND card-type = "${cardType}"    
+SORT date DESC
+\`\`\``;
+}
 
     private async createLiteratureStructure(mainFolder: TFolder, literature: LiteratureNote) {
         const litFolder = await this.createFolderIfNotExists(`${mainFolder.path}/${literature.title}`);
@@ -163,17 +205,16 @@ journal: ${literature.journal}
 date: ${literature.publicationDate}
 type: overview
 ---
-
+      
 # ${literature.title}
-
+       
 ## 基本信息
-- 作者：${literature.authors}
-- 期刊：${literature.journal}
-- 发表时间：${literature.publicationDate}
-
+    - 作者：${literature.authors}
+    - 期刊：${literature.journal}
+    - 发表时间：${literature.publicationDate}
+        
 ## 笔记导航
-${this.settings.readingCards.map(card => `- [[${card}]]`).join('\n')}
-`;
+${this.settings.readingCards.map(card => `- [[${card}]]`).join('\n')}`;
     }
 
     private generateCardContent(cardName: string, literature: LiteratureNote): string {
@@ -185,11 +226,17 @@ date: ${literature.publicationDate}
 type: reading-card
 card-type: ${cardName}
 ---
-
+    
 # ${cardName}
+    
+## 笔记内容
+    
+#摘要 
+
+#正文
 
 `;
-    }
+}
 
     private async createFolderIfNotExists(path: string): Promise<TFolder> {
         if (!(await this.app.vault.adapter.exists(path))) {
@@ -203,17 +250,32 @@ card-type: ${cardName}
         const literatures: LiteratureNote[] = [];
         
         for (const line of lines) {
-            const match = line.match(/\[\d+\](.*?)\. (.*?) \[J\]\. (.*?), (\d{4})/);
-            
-            if (match) {
-                const [, authors, title, journal, publicationDate] = match;
-                literatures.push({
-                    title: title.trim(),
-                    authors: authors.trim(),
-                    journal: journal.trim(),
-                    publicationDate: publicationDate.trim()
-                });
+            // 修改期刊论文[J]的匹配模式
+            const patterns = {
+                J: /\[\d+\](.*?)\.(.*?)\[J\]\.(.*?),(\d{4}),.*?(?:\.DOI:|$)/,
+                C: /\[\d+\](.*?)\. (.*?) \[C\]\/\/.*?\. (.*?), (\d{4})/,
+                M: /\[\d+\](.*?)\. (.*?) \[M\]\. (.*?): .*?, (\d{4})/,
+                D: /\[\d+\](.*?)\. (.*?) \[D\]\. (.*?), (\d{4})/
+            };
+        
+            for (const [type, pattern] of Object.entries(patterns)) {
+                const match = line.match(pattern);
+                if (match) {
+                    const [, authors, title, journal, publicationDate] = match;
+                    literatures.push({
+                        title: title.trim(),
+                        authors: authors.trim(),
+                        journal: journal.trim(),
+                        publicationDate: publicationDate.trim(),
+                        type: type
+                    });
+                    break;
+                }
             }
+        }
+        
+        if (literatures.length === 0) {
+            new Notice('未识别到任何文献引用，请检查格式是否正确');
         }
         
         return literatures;

@@ -1,9 +1,9 @@
 {
     "id": "literature-notes-generator",
     "name": "Literature Notes Generator",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "minAppVersion": "0.15.0",
     "description": "为文献笔记生成结构化的笔记模板",
-    "author": "你的名字",
+    "author": "小狼早上好",
     "isDesktopOnly": false
 }
